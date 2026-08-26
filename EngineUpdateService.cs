@@ -67,18 +67,20 @@ internal sealed class EngineUpdateService
             response.EnsureSuccessStatusCode();
             var length = response.Content.Headers.ContentLength;
             await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-            await using var output = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            var buffer = new byte[1024 * 128];
-            long downloaded = 0;
-            int read;
-            while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
             {
-                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                downloaded += read;
-                if (length is > 0) progress?.Report((int)(downloaded * 100 / length.Value));
-            }
+                await using var output = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                var buffer = new byte[1024 * 128];
+                long downloaded = 0;
+                int read;
+                while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    downloaded += read;
+                    if (length is > 0) progress?.Report((int)(downloaded * 100 / length.Value));
+                }
 
-            await output.FlushAsync(cancellationToken);
+                await output.FlushAsync(cancellationToken);
+            }
             var actualHash = await GetSha256Async(temporaryPath, cancellationToken);
             if (!string.Equals(actualHash, release.Sha256, StringComparison.OrdinalIgnoreCase))
             {
