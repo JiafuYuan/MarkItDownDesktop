@@ -24,6 +24,7 @@ internal sealed class EngineUpdateService
         response.EnsureSuccessStatusCode();
         var manifest = await JsonSerializer.DeserializeAsync<EngineRelease>(
             await response.Content.ReadAsStreamAsync(cancellationToken),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
             cancellationToken: cancellationToken);
 
         if (manifest is null || string.IsNullOrWhiteSpace(manifest.Version) ||
