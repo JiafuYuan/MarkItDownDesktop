@@ -18,10 +18,12 @@ internal sealed class MainForm : Form
     private readonly TextBox outputDirectoryBox = new();
     private readonly Button convertButton = new();
     private readonly Button removeButton = new();
+    private readonly Button updateEngineButton = new();
     private readonly Label statusLabel = new();
     private readonly ProgressBar progressBar = new();
     private readonly List<FileItem> files = [];
     private readonly string enginePath = Path.Combine(AppContext.BaseDirectory, "markitdown.exe");
+    private bool isConverting;
 
     public MainForm(IEnumerable<string>? startupFiles = null)
     {
@@ -74,6 +76,22 @@ internal sealed class MainForm : Form
             Font = new Font("Segoe UI", 11F),
             Location = new Point(4, 54),
         });
+        updateEngineButton.Text = "检查引擎更新";
+        updateEngineButton.AutoSize = true;
+        updateEngineButton.Padding = new Padding(10, 5, 10, 5);
+        updateEngineButton.FlatStyle = FlatStyle.Flat;
+        updateEngineButton.FlatAppearance.BorderColor = Color.FromArgb(190, 205, 219);
+        updateEngineButton.BackColor = Color.White;
+        updateEngineButton.Click += async (_, _) => await CheckForEngineUpdateAsync();
+        var headerActions = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Right,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(0, 10, 0, 0),
+        };
+        headerActions.Controls.Add(updateEngineButton);
+        header.Controls.Add(headerActions);
         layout.Controls.Add(header, 0, 0);
 
         var dropZone = new Panel
@@ -227,30 +245,39 @@ internal sealed class MainForm : Form
 
     private async Task ConvertFilesAsync()
     {
+        if (isConverting) return;
         if (files.Count == 0) { statusLabel.Text = "请先添加文件"; return; }
         if (!File.Exists(enginePath)) { MessageBox.Show(this, "未找到 markitdown.exe。请确保它与本程序放在同一个文件夹。", "转换引擎缺失", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         Directory.CreateDirectory(outputDirectoryBox.Text);
+        isConverting = true;
         SetControlsEnabled(false);
         progressBar.Minimum = 0;
         progressBar.Maximum = files.Count;
         progressBar.Value = 0;
         var failed = 0;
 
-        for (var index = 0; index < files.Count; index++)
+        try
         {
-            var item = files[index];
-            item.Status = "正在转换";
-            UpdateRow(item);
-            statusLabel.Text = $"正在转换 {index + 1}/{files.Count}: {Path.GetFileName(item.InputPath)}";
-            item.OutputPath = GetOutputPath(item.InputPath);
-            var result = await RunEngineAsync(item.InputPath, item.OutputPath);
-            item.Status = result.Success ? "已完成" : "转换失败";
-            if (!result.Success) { item.Error = result.Error; failed++; }
-            UpdateRow(item);
-            progressBar.Value = index + 1;
+            for (var index = 0; index < files.Count; index++)
+            {
+                var item = files[index];
+                item.Status = "正在转换";
+                UpdateRow(item);
+                statusLabel.Text = $"正在转换 {index + 1}/{files.Count}: {Path.GetFileName(item.InputPath)}";
+                item.OutputPath = GetOutputPath(item.InputPath);
+                var result = await RunEngineAsync(item.InputPath, item.OutputPath);
+                item.Status = result.Success ? "已完成" : "转换失败";
+                if (!result.Success) { item.Error = result.Error; failed++; }
+                UpdateRow(item);
+                progressBar.Value = index + 1;
+            }
+        }
+        finally
+        {
+            isConverting = false;
+            SetControlsEnabled(true);
         }
 
-        SetControlsEnabled(true);
         statusLabel.Text = failed == 0 ? $"已完成 {files.Count} 个文件" : $"完成，{failed} 个文件转换失败";
         if (failed > 0) MessageBox.Show(this, "部分文件未能转换。选择对应文件可在状态栏中查看结果。", "转换完成", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
@@ -262,9 +289,70 @@ internal sealed class MainForm : Form
         process.StartInfo.ArgumentList.Add("--output");
         process.StartInfo.ArgumentList.Add(output);
         process.Start();
-        var errors = await process.StandardError.ReadToEndAsync();
+        var errorsTask = process.StandardError.ReadToEndAsync();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
         await process.WaitForExitAsync();
+        var errors = await errorsTask;
+        await outputTask;
         return process.ExitCode == 0 ? new ConversionResult(true, "") : new ConversionResult(false, string.IsNullOrWhiteSpace(errors) ? "转换器未返回错误详情" : errors.Trim());
+    }
+
+    private async Task CheckForEngineUpdateAsync()
+    {
+        if (isConverting)
+        {
+            MessageBox.Show(this, "请等待当前转换完成后再更新引擎。", "正在转换", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        updateEngineButton.Enabled = false;
+        try
+        {
+            statusLabel.Text = "正在检查引擎更新...";
+            var updater = new EngineUpdateService(enginePath);
+            var release = await updater.GetLatestReleaseAsync(CancellationToken.None);
+            var installedVersion = await updater.GetInstalledVersionAsync(CancellationToken.None);
+            if (!release.IsNewerThan(installedVersion))
+            {
+                statusLabel.Text = $"转换引擎已是最新版本 {installedVersion ?? release.Version}";
+                MessageBox.Show(this, statusLabel.Text, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var currentText = installedVersion ?? "未安装";
+            var choice = MessageBox.Show(this, $"发现新的转换引擎。\n\n当前版本: {currentText}\n可用版本: {release.Version}\n\n现在下载并安装吗？", "引擎更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (choice != DialogResult.Yes)
+            {
+                statusLabel.Text = "已取消引擎更新";
+                return;
+            }
+
+            var progress = new Progress<int>(value =>
+            {
+                progressBar.Minimum = 0;
+                progressBar.Maximum = 100;
+                progressBar.Value = value;
+                statusLabel.Text = $"正在下载引擎更新: {value}%";
+            });
+            await updater.InstallAsync(release, progress, CancellationToken.None);
+            progressBar.Value = 100;
+            statusLabel.Text = $"已更新转换引擎至 {release.Version}";
+            MessageBox.Show(this, statusLabel.Text, "更新完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (EngineUpdateException exception)
+        {
+            statusLabel.Text = "引擎更新不可用";
+            MessageBox.Show(this, exception.Message, "引擎更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        catch (Exception exception)
+        {
+            statusLabel.Text = "引擎更新失败";
+            MessageBox.Show(this, $"无法完成引擎更新。\n\n{exception.Message}", "引擎更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            updateEngineButton.Enabled = true;
+        }
     }
 
     private string GetOutputPath(string input)
@@ -289,6 +377,7 @@ internal sealed class MainForm : Form
         convertButton.Enabled = enabled;
         removeButton.Enabled = enabled && filesView.SelectedItems.Count > 0;
         filesView.Enabled = enabled;
+        updateEngineButton.Enabled = enabled;
     }
 
     private sealed class FileItem(string inputPath)
