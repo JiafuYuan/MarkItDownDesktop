@@ -34,6 +34,7 @@ internal sealed class MainForm : Form
         BackColor = Color.FromArgb(246, 247, 249);
         Font = new Font("Segoe UI", 10F);
         AllowDrop = true;
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
 
         BuildLayout();
         outputDirectoryBox.Text = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
