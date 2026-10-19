@@ -31,4 +31,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = 'engine-v${{ inputs.version }}'
-          gh release create $tag artifacts\markitdown.exe artifacts\engine-update.json --title "MarkItDown engine ${{ inputs.version }}" --generate-notes --latest
+          gh release create $tag artifacts\markitdown.exe artifacts\engine-update.json artifacts\engine.version --title "MarkItDown engine ${{ inputs.version }}" --generate-notes --latest

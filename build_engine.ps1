@@ -47,4 +47,5 @@ $engine = Join-Path $OutputDirectory "markitdown.exe"
 $sha256 = (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant()
 @{ version = $Version; url = "https://github.com/JiafuYuan/MarkItDownDesktop/releases/download/engine-v$Version/markitdown.exe"; sha256 = $sha256 } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory "engine-update.json") -Encoding utf8
+$Version | Set-Content -LiteralPath (Join-Path $OutputDirectory "engine.version") -Encoding utf8
 Write-Host "Created: $engine"

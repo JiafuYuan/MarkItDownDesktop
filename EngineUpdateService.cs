@@ -9,9 +9,15 @@ internal sealed class EngineUpdateService
 {
     private const string ManifestUrl = "https://github.com/JiafuYuan/MarkItDownDesktop/releases/latest/download/engine-update.json";
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromMinutes(10) };
+    private static readonly Regex VersionPattern = new(@"\d+\.\d+(?:\.\d+)?", RegexOptions.Compiled);
     private readonly string enginePath;
+    private readonly string versionPath;
 
-    public EngineUpdateService(string enginePath) => this.enginePath = enginePath;
+    public EngineUpdateService(string enginePath)
+    {
+        this.enginePath = enginePath;
+        versionPath = Path.Combine(Path.GetDirectoryName(enginePath) ?? ".", "engine.version");
+    }
 
     public async Task<EngineRelease> GetLatestReleaseAsync(CancellationToken cancellationToken)
     {
@@ -41,21 +47,34 @@ internal sealed class EngineUpdateService
     {
         if (!File.Exists(enginePath)) return null;
 
-        using var process = new Process
+        // engine.version 记录的是本程序发布的引擎版本，优先于引擎自报版本。
+        // markitdown.exe --version 输出的是上游 markitdown 包版本，可能落后于我们的引擎版本。
+        var recorded = await ReadRecordedVersionAsync(cancellationToken);
+        if (recorded is not null) return recorded;
+
+        try
         {
-            StartInfo = new ProcessStartInfo(enginePath, "--version")
+            using var process = new Process
             {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            },
-        };
-        process.Start();
-        var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        var match = Regex.Match(output, @"\d+\.\d+(?:\.\d+)?");
-        return process.ExitCode == 0 && match.Success ? match.Value : null;
+                StartInfo = new ProcessStartInfo(enginePath, "--version")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                },
+            };
+            process.Start();
+            var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken);
+            var match = VersionPattern.Match(output);
+            return process.ExitCode == 0 && match.Success ? match.Value : null;
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            // 引擎文件损坏或无法执行时按“版本未知”处理，使用户可以重新下载安装。
+            return null;
+        }
     }
 
     public async Task InstallAsync(EngineRelease release, IProgress<int>? progress, CancellationToken cancellationToken)
@@ -97,10 +116,26 @@ internal sealed class EngineUpdateService
             {
                 File.Move(temporaryPath, enginePath);
             }
+
+            await File.WriteAllTextAsync(versionPath, release.Version + Environment.NewLine, cancellationToken);
         }
         finally
         {
             if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
+    }
+
+    private async Task<string?> ReadRecordedVersionAsync(CancellationToken cancellationToken)
+    {
+        if (!File.Exists(versionPath)) return null;
+        try
+        {
+            var text = (await File.ReadAllTextAsync(versionPath, cancellationToken)).Trim();
+            return Version.TryParse(text, out _) ? text : null;
+        }
+        catch (IOException)
+        {
+            return null;
         }
     }
 
