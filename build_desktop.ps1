@@ -1,5 +1,6 @@
 param(
-    [string]$EngineVersion
+    [string]$EngineVersion,
+    [string]$AppVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,7 +11,9 @@ $engine = Join-Path $PSScriptRoot "outputs\markitdown.exe"
 
 if (-not (Test-Path $engine)) { throw "Missing conversion engine: $engine" }
 
-dotnet publish $project -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o $output
+$publishArgs = @($project, '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true', '-p:DebugType=None', '-o', $output)
+if ($AppVersion) { $publishArgs += "-p:Version=$AppVersion" }
+dotnet publish @publishArgs
 Copy-Item -LiteralPath $engine -Destination (Join-Path $output "markitdown.exe") -Force
 
 if (-not $EngineVersion) {
@@ -28,5 +31,6 @@ if ($EngineVersion) {
 else {
     Write-Warning "Could not determine the engine version. engine.version was not written."
 }
+if ($AppVersion) { Write-Host "Application version: $AppVersion" }
 
 Write-Host "Created: $(Join-Path $output 'MarkItDownDesktop.exe')"

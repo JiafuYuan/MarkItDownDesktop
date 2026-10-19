@@ -1,11 +1,13 @@
 param(
     [string]$SourceRef = "main",
     [string]$Version = "0.1.7",
+    [string]$ReleaseTag = "",
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "artifacts"),
     [switch]$RefreshSource
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $ReleaseTag) { $ReleaseTag = "engine-v$Version" }
 $sourceDir = Join-Path $PSScriptRoot "work\markitdown"
 $venvDir = Join-Path $sourceDir ".venv-build"
 $python = Join-Path $venvDir "Scripts\python.exe"
@@ -22,7 +24,9 @@ if ($RefreshSource) { git pull --ff-only origin $SourceRef }
 Pop-Location
 
 if (-not (Test-Path $python)) {
-    py -3.12 -m venv $venvDir
+    if (Get-Command py -ErrorAction SilentlyContinue) { py -3.12 -m venv $venvDir }
+    else { python -m venv $venvDir }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to create the build virtual environment." }
 }
 
 & $python -m pip install --upgrade pip
@@ -45,7 +49,7 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCOD
 
 $engine = Join-Path $OutputDirectory "markitdown.exe"
 $sha256 = (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant()
-@{ version = $Version; url = "https://github.com/JiafuYuan/MarkItDownDesktop/releases/download/engine-v$Version/markitdown.exe"; sha256 = $sha256 } |
+@{ version = $Version; url = "https://github.com/JiafuYuan/MarkItDownDesktop/releases/download/$ReleaseTag/markitdown.exe"; sha256 = $sha256 } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory "engine-update.json") -Encoding utf8
 $Version | Set-Content -LiteralPath (Join-Path $OutputDirectory "engine.version") -Encoding utf8
 Write-Host "Created: $engine"

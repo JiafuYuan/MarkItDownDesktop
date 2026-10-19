@@ -1,0 +1,55 @@
+name: Release MarkItDown
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 1.0.0
+        required: true
+      markitdown_ref:
+        description: Microsoft MarkItDown tag or commit (main is allowed)
+        required: true
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build conversion engine
+        shell: pwsh
+        run: .\build_engine.ps1 -SourceRef '${{ inputs.markitdown_ref }}' -Version '${{ inputs.version }}' -ReleaseTag 'v${{ inputs.version }}' -OutputDirectory artifacts
+      - name: Verify engine manifest
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -LiteralPath artifacts\engine-update.json -Raw | ConvertFrom-Json
+          if ($manifest.version -ne '${{ inputs.version }}') { throw "Engine manifest reports version $($manifest.version)." }
+          $hash = (Get-FileHash -LiteralPath artifacts\markitdown.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $manifest.sha256) { throw "Engine hash mismatch: $hash" }
+      - name: Stage engine for the desktop build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force outputs | Out-Null
+          Copy-Item artifacts\markitdown.exe, artifacts\engine-update.json, artifacts\engine.version outputs\ -Force
+      - name: Build desktop application
+        shell: pwsh
+        run: .\build_desktop.ps1 -EngineVersion '${{ inputs.version }}' -AppVersion '${{ inputs.version }}'
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path outputs\MarkItDownDesktop -DestinationPath artifacts\MarkItDownDesktop-${{ inputs.version }}-win-x64.zip
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'v${{ inputs.version }}'
+          gh release create $tag artifacts\MarkItDownDesktop-${{ inputs.version }}-win-x64.zip artifacts\markitdown.exe artifacts\engine-update.json artifacts\engine.version --title "MarkItDown ${{ inputs.version }}" --generate-notes --latest
