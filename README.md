@@ -32,3 +32,24 @@ For a local engine build, run:
 ```
 
 This requires Git and Python 3.12. The GitHub Actions workflow installs Python automatically.
+
+The build writes three files to `artifacts`: `markitdown.exe`, `engine-update.json`, and `engine.version`. `engine.version` is the version the desktop app records and compares against, because `markitdown.exe --version` reports the upstream MarkItDown package version instead.
+
+## Release the desktop application
+
+Open the repository's **Actions** tab, choose **Release MarkItDown desktop**, click **Run workflow**, and provide:
+
+- `version`: a new desktop version, such as `1.0.0`
+- `engine_version`: the engine release to bundle, such as `0.1.8`
+
+The workflow downloads that engine release, verifies its SHA-256 against `engine-update.json`, builds the self-contained application, and publishes `MarkItDownDesktop-<version>-win-x64.zip` in a GitHub Release named `desktop-v<version>`.
+
+The desktop release is deliberately **not** marked latest: `releases/latest` must keep pointing at the engine release, because the app downloads `engine-update.json` from that URL.
+
+For a local desktop build, run:
+
+```powershell
+.\build_desktop.ps1
+```
+
+Pass `-EngineVersion 0.1.8` to record the bundled engine version explicitly. Without it, the script reads `outputs\engine-update.json`, then falls back to `markitdown.exe --version`, and writes `engine.version` next to the engine.
