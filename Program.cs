@@ -24,6 +24,7 @@ internal sealed class MainForm : Form
     private readonly List<FileItem> files = [];
     private readonly string enginePath = Path.Combine(AppContext.BaseDirectory, "markitdown.exe");
     private bool isConverting;
+    private bool isUpdating;
 
     public MainForm(IEnumerable<string>? startupFiles = null)
     {
@@ -41,6 +42,14 @@ internal sealed class MainForm : Form
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
         if (startupFiles is not null) AddFiles(startupFiles);
+    }
+
+    protected override async void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        UpdateEngineButtonText();
+        if (File.Exists(enginePath)) return;
+        await EnsureEngineAsync();
     }
 
     private void BuildLayout()
@@ -247,6 +256,7 @@ internal sealed class MainForm : Form
     private async Task ConvertFilesAsync()
     {
         if (isConverting) return;
+        if (isUpdating) { statusLabel.Text = "正在下载转换引擎，请稍候"; return; }
         if (files.Count == 0) { statusLabel.Text = "请先添加文件"; return; }
         if (!File.Exists(enginePath)) { MessageBox.Show(this, "未找到 markitdown.exe。请确保它与本程序放在同一个文件夹。", "转换引擎缺失", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
         Directory.CreateDirectory(outputDirectoryBox.Text);
@@ -298,11 +308,51 @@ internal sealed class MainForm : Form
         return process.ExitCode == 0 ? new ConversionResult(true, "") : new ConversionResult(false, string.IsNullOrWhiteSpace(errors) ? "转换器未返回错误详情" : errors.Trim());
     }
 
+    private void UpdateEngineButtonText() => updateEngineButton.Text = File.Exists(enginePath) ? "检查引擎更新" : "下载转换引擎";
+
+    private async Task EnsureEngineAsync()
+    {
+        isUpdating = true;
+        SetControlsEnabled(false);
+        statusLabel.Text = "未找到转换引擎，正在自动下载...";
+        try
+        {
+            var updater = new EngineUpdateService(enginePath);
+            var release = await updater.GetLatestReleaseAsync(CancellationToken.None);
+            await DownloadEngineAsync(updater, release, "正在下载转换引擎");
+            statusLabel.Text = $"转换引擎已就绪 {release.Version}";
+        }
+        catch (Exception exception)
+        {
+            statusLabel.Text = "转换引擎尚未安装";
+            MessageBox.Show(this, $"无法自动下载转换引擎。\n\n{exception.Message}\n\n请点击“下载转换引擎”重试。", "转换引擎缺失", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            isUpdating = false;
+            SetControlsEnabled(true);
+            UpdateEngineButtonText();
+        }
+    }
+
+    private async Task DownloadEngineAsync(EngineUpdateService updater, EngineRelease release, string action)
+    {
+        var progress = new Progress<int>(value =>
+        {
+            progressBar.Minimum = 0;
+            progressBar.Maximum = 100;
+            progressBar.Value = value;
+            statusLabel.Text = $"{action}: {value}%";
+        });
+        await updater.InstallAsync(release, progress, CancellationToken.None);
+        progressBar.Value = 100;
+    }
+
     private async Task CheckForEngineUpdateAsync()
     {
-        if (isConverting)
+        if (isConverting || isUpdating)
         {
-            MessageBox.Show(this, "请等待当前转换完成后再更新引擎。", "正在转换", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "请等待当前任务完成后再更新引擎。", "正在处理", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -328,15 +378,7 @@ internal sealed class MainForm : Form
                 return;
             }
 
-            var progress = new Progress<int>(value =>
-            {
-                progressBar.Minimum = 0;
-                progressBar.Maximum = 100;
-                progressBar.Value = value;
-                statusLabel.Text = $"正在下载引擎更新: {value}%";
-            });
-            await updater.InstallAsync(release, progress, CancellationToken.None);
-            progressBar.Value = 100;
+            await DownloadEngineAsync(updater, release, "正在下载引擎更新");
             statusLabel.Text = $"已更新转换引擎至 {release.Version}";
             MessageBox.Show(this, statusLabel.Text, "更新完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -353,6 +395,7 @@ internal sealed class MainForm : Form
         finally
         {
             updateEngineButton.Enabled = true;
+            UpdateEngineButtonText();
         }
     }
 
