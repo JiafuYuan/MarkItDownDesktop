@@ -43,7 +43,7 @@ internal sealed class FileListCard : CardPanel
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
-        if (IsSelectAllHit(e.Location))
+        if (list.Interactive && IsSelectAllHit(e.Location))
         {
             list.ToggleAll();
             return;

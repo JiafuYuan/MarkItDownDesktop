@@ -23,6 +23,7 @@ internal sealed class FileListView : ListView
     private static int BadgeGap => Theme.S(14);
 
     private int hovered = -1;
+    private bool interactive = true;
 
     public FileListView()
     {
@@ -54,6 +55,22 @@ internal sealed class FileListView : ListView
     public event Action? CheckedChanged;
 
     public event Action<FileItem, Point>? MoreRequested;
+
+    /// <summary>
+    /// When false the list keeps its normal appearance but ignores clicks, so the card does not
+    /// turn into the gray disabled control background while a conversion is running.
+    /// </summary>
+    public bool Interactive
+    {
+        get => interactive;
+        set
+        {
+            if (interactive == value) return;
+            interactive = value;
+            hovered = -1;
+            Invalidate();
+        }
+    }
 
     public IEnumerable<FileItem> FileItems => Items.Cast<ListViewItem>().Select(row => row.Tag).OfType<FileItem>();
 
@@ -251,6 +268,7 @@ internal sealed class FileListView : ListView
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        if (!interactive) return;
         var index = HitTest(e.Location).Item?.Index ?? -1;
         if (index == hovered) return;
         hovered = index;
@@ -267,6 +285,12 @@ internal sealed class FileListView : ListView
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
+        if (!interactive)
+        {
+            base.OnMouseDown(e);
+            return;
+        }
+
         var info = HitTest(e.Location);
         if (info.Item?.Tag is FileItem item)
         {

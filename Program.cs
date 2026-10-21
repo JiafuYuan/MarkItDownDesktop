@@ -614,7 +614,7 @@ internal sealed class MainForm : Form
     {
         addButton.Enabled = enabled;
         convertButton.Enabled = enabled;
-        fileCard.FileList.Enabled = enabled;
+        fileCard.FileList.Interactive = enabled;
         headerCard.UpdateButton.Enabled = enabled;
         UpdateActionButtons();
     }
