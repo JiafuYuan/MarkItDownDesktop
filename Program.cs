@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using MarkItDownDesktop.Ui;
 
 namespace MarkItDownDesktop;
 
@@ -8,37 +10,59 @@ internal static class Program
     private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+        Theme.Scale = SystemDpi() / 96f;
         Application.Run(new MainForm(args));
     }
+
+    /// <summary>System DPI, used to scale the hand written layout on high DPI displays.</summary>
+    private static int SystemDpi()
+    {
+        try
+        {
+            var dpi = GetDpiForSystem();
+            return dpi >= 48 && dpi <= 480 ? (int)dpi : 96;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return 96;
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForSystem();
 }
 
 internal sealed class MainForm : Form
 {
-    private readonly ListView filesView = new();
-    private readonly TextBox outputDirectoryBox = new();
-    private readonly Button convertButton = new();
-    private readonly Button removeButton = new();
-    private readonly Button updateEngineButton = new();
-    private readonly Label statusLabel = new();
-    private readonly ProgressBar progressBar = new();
+    private readonly HeaderCard headerCard = new();
+    private readonly FileListCard fileCard = new();
+    private readonly FieldBox outputBox = new();
+    private readonly AccentButton addButton = new();
+    private readonly AccentButton removeButton = new();
+    private readonly AccentButton chooseFolderButton = new();
+    private readonly AccentButton convertButton = new();
+    private readonly StatusLine statusLine = new();
+    private readonly RoundedProgressBar progressBar = new();
     private readonly List<FileItem> files = [];
     private readonly string enginePath = Path.Combine(AppContext.BaseDirectory, "markitdown.exe");
+    private string outputDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
     private bool isConverting;
     private bool isUpdating;
 
     public MainForm(IEnumerable<string>? startupFiles = null)
     {
         Text = "MarkItDown";
-        MinimumSize = new Size(900, 650);
-        Size = new Size(1080, 760);
+        MinimumSize = Theme.S(760, 560);
+        Size = Theme.S(884, 616);
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Color.FromArgb(246, 247, 249);
-        Font = new Font("Segoe UI", 10F);
+        BackColor = Theme.Page;
+        Font = Theme.Body;
         AllowDrop = true;
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
 
         BuildLayout();
-        outputDirectoryBox.Text = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+        outputBox.Value = outputDirectory;
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
         if (startupFiles is not null) AddFiles(startupFiles);
@@ -52,162 +76,158 @@ internal sealed class MainForm : Form
         await EnsureEngineAsync();
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        ApplyCaptionColors();
+    }
+
     private void BuildLayout()
     {
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(28),
+            Padding = new Padding(Theme.S(12), Theme.S(10), Theme.S(12), Theme.S(12)),
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 4,
+            BackColor = Theme.Page,
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, Theme.S(135)));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, Theme.S(116)));
         Controls.Add(layout);
 
-        var header = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(246, 247, 249) };
-        header.Controls.Add(new Label
-        {
-            Text = "MarkItDown",
-            Font = new Font("Segoe UI Semibold", 30F),
-            ForeColor = Color.FromArgb(20, 51, 82),
-            AutoSize = true,
-            Location = new Point(0, 0),
-        });
-        header.Controls.Add(new Label
-        {
-            Text = "将文档转换为 Markdown",
-            ForeColor = Color.FromArgb(92, 101, 115),
-            AutoSize = true,
-            Font = new Font("Segoe UI", 11F),
-            Location = new Point(4, 54),
-        });
-        updateEngineButton.Text = "检查引擎更新";
-        updateEngineButton.AutoSize = true;
-        updateEngineButton.Padding = new Padding(10, 5, 10, 5);
-        updateEngineButton.FlatStyle = FlatStyle.Flat;
-        updateEngineButton.FlatAppearance.BorderColor = Color.FromArgb(190, 205, 219);
-        updateEngineButton.BackColor = Color.White;
-        updateEngineButton.Click += async (_, _) => await CheckForEngineUpdateAsync();
-        var headerActions = new FlowLayoutPanel
-        {
-            AutoSize = true,
-            Dock = DockStyle.Right,
-            FlowDirection = FlowDirection.RightToLeft,
-            Padding = new Padding(0, 10, 0, 0),
-        };
-        headerActions.Controls.Add(updateEngineButton);
-        header.Controls.Add(headerActions);
-        layout.Controls.Add(header, 0, 0);
+        headerCard.Dock = DockStyle.Fill;
+        headerCard.Margin = new Padding(0, 0, 0, Theme.S(8));
+        headerCard.CardClicked += (_, _) => AddFilesFromDialog();
+        headerCard.DragEnter += OnDragEnter;
+        headerCard.DragDrop += OnDragDrop;
+        headerCard.UpdateButton.Click += async (_, _) => await CheckForEngineUpdateAsync();
+        layout.Controls.Add(headerCard, 0, 0);
 
-        var dropZone = new Panel
+        fileCard.Dock = DockStyle.Fill;
+        fileCard.Margin = new Padding(0, 0, 0, Theme.S(16));
+        fileCard.CheckedChanged += UpdateActionButtons;
+        fileCard.MoreRequested += ShowRowMenu;
+        fileCard.FileList.DragEnter += OnDragEnter;
+        fileCard.FileList.DragDrop += OnDragDrop;
+        fileCard.FileList.SelectedIndexChanged += (_, _) => UpdateActionButtons();
+        layout.Controls.Add(fileCard, 0, 1);
+
+        var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(235, 244, 251),
-            BorderStyle = BorderStyle.FixedSingle,
-            Cursor = Cursors.Hand,
-            AllowDrop = true,
-        };
-        var dropTitle = new Label
-        {
-            Text = "拖放文件到这里",
-            Font = new Font("Segoe UI Semibold", 13F),
-            ForeColor = Color.FromArgb(20, 74, 116),
             AutoSize = true,
-            Location = new Point(20, 13),
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            Margin = new Padding(0, 0, 0, Theme.S(10)),
+            BackColor = Theme.Page,
         };
-        var dropSubtitle = new Label
-        {
-            Text = "支持批量添加，或点击此区域选择文件",
-            Font = new Font("Segoe UI", 10F),
-            ForeColor = Color.FromArgb(83, 105, 122),
-            AutoSize = true,
-            Location = new Point(21, 43),
-        };
-        dropZone.Controls.Add(dropTitle);
-        dropZone.Controls.Add(dropSubtitle);
-        dropZone.Click += (_, _) => AddFilesFromDialog();
-        dropTitle.Click += (_, _) => AddFilesFromDialog();
-        dropSubtitle.Click += (_, _) => AddFilesFromDialog();
-        dropZone.DragEnter += OnDragEnter;
-        dropZone.DragDrop += OnDragDrop;
-        layout.Controls.Add(dropZone, 0, 1);
-
-        var filePanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 14, 0, 14) };
-        filesView.Dock = DockStyle.Fill;
-        filesView.BackColor = Color.White;
-        filesView.BorderStyle = BorderStyle.FixedSingle;
-        filesView.Font = new Font("Segoe UI", 10F);
-        filesView.View = View.Details;
-        filesView.FullRowSelect = true;
-        filesView.GridLines = false;
-        filesView.HideSelection = false;
-        filesView.AllowDrop = true;
-        filesView.Columns.Add("文件", 430);
-        filesView.Columns.Add("类型", 100);
-        filesView.Columns.Add("状态", 150);
-        filesView.Columns.Add("输出", 240);
-        filesView.DragEnter += OnDragEnter;
-        filesView.DragDrop += OnDragDrop;
-        filesView.SelectedIndexChanged += (_, _) => removeButton.Enabled = filesView.SelectedItems.Count > 0;
-
-        filePanel.Controls.Add(filesView);
-        layout.Controls.Add(filePanel, 0, 2);
-
-        var fileActions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        var addButton = CreateButton("添加文件", AddFilesFromDialog);
+        addButton.Text = "添加文件";
+        addButton.Icon = Glyph.Plus;
+        addButton.MinimumHeight = Theme.S(36);
+        addButton.Margin = new Padding(0, 0, Theme.S(10), 0);
+        addButton.Click += (_, _) => AddFilesFromDialog();
         removeButton.Text = "移除所选";
-        removeButton.AutoSize = true;
+        removeButton.Icon = Glyph.Trash;
+        removeButton.Primary = false;
+        removeButton.MinimumHeight = Theme.S(36);
         removeButton.Enabled = false;
+        removeButton.Margin = new Padding(0);
         removeButton.Click += (_, _) => RemoveSelectedFiles();
-        fileActions.Controls.Add(addButton);
-        fileActions.Controls.Add(removeButton);
-        layout.Controls.Add(fileActions, 0, 3);
+        actions.Controls.Add(addButton);
+        actions.Controls.Add(removeButton);
+        layout.Controls.Add(actions, 0, 2);
 
-        var outputPanel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, Padding = new Padding(0, 16, 0, 0) };
-        outputPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        outputPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        outputPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        outputPanel.Controls.Add(new Label { Text = "保存到", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 12, 0) }, 0, 0);
-        outputDirectoryBox.Dock = DockStyle.Fill;
-        outputDirectoryBox.ReadOnly = true;
-        outputPanel.Controls.Add(outputDirectoryBox, 1, 0);
-        outputPanel.Controls.Add(CreateButton("选择文件夹", ChooseOutputDirectory), 2, 0);
-        layout.Controls.Add(outputPanel, 0, 4);
-
-        var footer = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Padding = new Padding(0, 18, 0, 0) };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var progressPanel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-        statusLabel.Text = "添加一个或多个文件以开始";
-        statusLabel.ForeColor = Color.FromArgb(84, 94, 108);
-        statusLabel.AutoSize = true;
-        progressBar.Dock = DockStyle.Top;
-        progressBar.Height = 6;
-        progressPanel.Controls.Add(statusLabel, 0, 0);
-        progressPanel.Controls.Add(progressBar, 0, 1);
-        convertButton.Text = "开始转换";
-        convertButton.AutoSize = true;
-        convertButton.Padding = new Padding(16, 7, 16, 7);
-        convertButton.BackColor = Color.FromArgb(20, 94, 179);
-        convertButton.ForeColor = Color.White;
-        convertButton.FlatStyle = FlatStyle.Flat;
-        convertButton.FlatAppearance.BorderSize = 0;
-        convertButton.Click += async (_, _) => await ConvertFilesAsync();
-        footer.Controls.Add(progressPanel, 0, 0);
-        footer.Controls.Add(convertButton, 1, 0);
-        layout.Controls.Add(footer, 0, 5);
+        layout.Controls.Add(BuildBottomCard(), 0, 3);
     }
 
-    private Button CreateButton(string text, Action action)
+    private CardPanel BuildBottomCard()
     {
-        var button = new Button { Text = text, AutoSize = true, Padding = new Padding(8, 4, 8, 4), Margin = new Padding(0, 0, 8, 0) };
-        button.Click += (_, _) => action();
-        return button;
+        var card = new CardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = Theme.SurfaceSubtle,
+            SurroundColor = Theme.Page,
+            Padding = new Padding(Theme.S(14), Theme.S(12), Theme.S(14), Theme.S(10)),
+            Margin = new Padding(0),
+        };
+
+        var grid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 2,
+            BackColor = Theme.SurfaceSubtle,
+        };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Theme.S(38)));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var label = new Label
+        {
+            Text = "保存到",
+            AutoSize = true,
+            Font = Theme.BodyStrong,
+            ForeColor = Theme.Text,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(Theme.S(2), 0, Theme.S(10), 0),
+        };
+        grid.Controls.Add(label, 0, 0);
+
+        outputBox.Dock = DockStyle.Fill;
+        outputBox.Margin = new Padding(0, Theme.S(1), Theme.S(12), Theme.S(1));
+        outputBox.FieldClicked += (_, _) => ChooseOutputDirectory();
+        grid.Controls.Add(outputBox, 1, 0);
+
+        chooseFolderButton.Text = "选择文件夹";
+        chooseFolderButton.Primary = false;
+        chooseFolderButton.HorizontalPadding = Theme.S(15);
+        chooseFolderButton.MinimumHeight = Theme.S(36);
+        chooseFolderButton.Anchor = AnchorStyles.Right;
+        chooseFolderButton.Margin = new Padding(0, Theme.S(1), 0, Theme.S(1));
+        chooseFolderButton.Click += (_, _) => ChooseOutputDirectory();
+        grid.Controls.Add(chooseFolderButton, 2, 0);
+
+        var statusPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Theme.SurfaceSubtle,
+            Margin = new Padding(Theme.S(2), Theme.S(9), Theme.S(12), 0),
+        };
+        statusPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, Theme.S(18)));
+        statusPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, Theme.S(14)));
+        statusLine.Dock = DockStyle.Fill;
+        statusLine.Margin = new Padding(0);
+        statusLine.Text = "添加一个或多个文件以开始";
+        progressBar.Dock = DockStyle.Fill;
+        progressBar.Margin = new Padding(0, Theme.S(6), 0, 0);
+        progressBar.SurroundColor = Theme.SurfaceSubtle;
+        progressBar.Maximum = 100;
+        statusPanel.Controls.Add(statusLine, 0, 0);
+        statusPanel.Controls.Add(progressBar, 0, 1);
+        grid.Controls.Add(statusPanel, 0, 1);
+        grid.SetColumnSpan(statusPanel, 2);
+
+        convertButton.Text = "开始转换";
+        convertButton.Icon = Glyph.Refresh;
+        convertButton.MinimumHeight = Theme.S(46);
+        convertButton.HorizontalPadding = Theme.S(18);
+        convertButton.IconSize = Theme.S(15);
+        convertButton.Font = Theme.ButtonTextLarge;
+        convertButton.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+        convertButton.Margin = new Padding(0);
+        convertButton.Click += async (_, _) => await ConvertFilesAsync();
+        grid.Controls.Add(convertButton, 2, 1);
+
+        card.Controls.Add(grid);
+        return card;
     }
 
     private void AddFilesFromDialog()
@@ -218,11 +238,14 @@ internal sealed class MainForm : Form
 
     private void ChooseOutputDirectory()
     {
-        using var dialog = new FolderBrowserDialog { Description = "选择 Markdown 文件保存位置" };
-        if (dialog.ShowDialog(this) == DialogResult.OK) outputDirectoryBox.Text = dialog.SelectedPath;
+        using var dialog = new FolderBrowserDialog { Description = "选择 Markdown 文件保存位置", SelectedPath = outputDirectory };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        outputDirectory = dialog.SelectedPath;
+        outputBox.Value = outputDirectory;
     }
 
-    private void OnDragEnter(object? sender, DragEventArgs e) => e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
+    private void OnDragEnter(object? sender, DragEventArgs e) =>
+        e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
 
     private void OnDragDrop(object? sender, DragEventArgs e)
     {
@@ -231,55 +254,155 @@ internal sealed class MainForm : Form
 
     private void AddFiles(IEnumerable<string> paths)
     {
+        var added = false;
         foreach (var path in paths.Where(File.Exists))
         {
             if (files.Any(item => string.Equals(item.InputPath, path, StringComparison.OrdinalIgnoreCase))) continue;
             var item = new FileItem(path);
             files.Add(item);
-            filesView.Items.Add(CreateListItem(item));
+            fileCard.FileList.Items.Add(CreateRow(item));
+            added = true;
         }
-        statusLabel.Text = files.Count == 0 ? "添加一个或多个文件以开始" : $"已添加 {files.Count} 个文件";
+
+        if (added) UpdateIdleStatus();
+        UpdateActionButtons();
     }
 
-    private ListViewItem CreateListItem(FileItem item) => new([Path.GetFileName(item.InputPath), Path.GetExtension(item.InputPath).TrimStart('.').ToUpperInvariant(), item.Status, item.OutputPath is null ? "" : Path.GetFileName(item.OutputPath)]) { Tag = item };
+    private static ListViewItem CreateRow(FileItem item) =>
+        new([string.Empty, item.FileName, item.Extension, item.Status, string.Empty, string.Empty]) { Tag = item };
 
     private void RemoveSelectedFiles()
     {
-        foreach (ListViewItem row in filesView.SelectedItems)
+        var targets = fileCard.FileList.CheckedFiles.ToList();
+        if (targets.Count == 0)
         {
-            if (row.Tag is FileItem item) files.Remove(item);
-            filesView.Items.Remove(row);
+            targets = fileCard.FileList.SelectedItems.Cast<ListViewItem>()
+                .Select(row => row.Tag)
+                .OfType<FileItem>()
+                .ToList();
         }
-        statusLabel.Text = files.Count == 0 ? "添加一个或多个文件以开始" : $"已添加 {files.Count} 个文件";
+
+        if (targets.Count == 0) return;
+        RemoveFiles(targets);
+    }
+
+    private void RemoveFiles(IEnumerable<FileItem> targets)
+    {
+        foreach (var item in targets.ToList())
+        {
+            files.Remove(item);
+            var row = fileCard.FileList.Items.Cast<ListViewItem>().FirstOrDefault(candidate => ReferenceEquals(candidate.Tag, item));
+            if (row is not null) fileCard.FileList.Items.Remove(row);
+        }
+
+        UpdateIdleStatus();
+        UpdateActionButtons();
+    }
+
+    private void ShowRowMenu(FileItem item, Point location)
+    {
+        var menu = new ContextMenuStrip { ShowImageMargin = false, Font = Theme.Body };
+        menu.Items.Add("打开输出位置", null, (_, _) => OpenOutputFolder(item));
+        var retry = menu.Items.Add("重新转换", null, async (_, _) => await ConvertItemsAsync([item]));
+        retry.Enabled = !isConverting && !isUpdating && File.Exists(enginePath);
+        var details = menu.Items.Add("错误详情", null, (_, _) => ShowItemError(item));
+        details.Enabled = !string.IsNullOrWhiteSpace(item.Error);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("移除", null, (_, _) => RemoveFiles([item]));
+
+        // open towards the inside of the window so the menu stays visible
+        var size = menu.GetPreferredSize(Size.Empty);
+        var x = Math.Max(0, Math.Min(location.X, fileCard.FileList.ClientSize.Width - size.Width));
+        menu.Show(fileCard.FileList, new Point(x, location.Y));
+    }
+
+    private void ShowItemError(FileItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Error)) return;
+        MessageBox.Show(this, item.Error, $"{item.FileName} 转换失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    private void OpenOutputFolder(FileItem item)
+    {
+        if (item.OutputPath is not null && File.Exists(item.OutputPath))
+        {
+            Process.Start("explorer.exe", $"/select,\"{item.OutputPath}\"");
+            return;
+        }
+
+        if (Directory.Exists(outputDirectory))
+        {
+            Process.Start("explorer.exe", $"\"{outputDirectory}\"");
+            return;
+        }
+
+        statusLine.Text = "输出文件夹尚未创建";
     }
 
     private async Task ConvertFilesAsync()
     {
+        await ConvertItemsAsync(files.ToList());
+    }
+
+    private async Task ConvertItemsAsync(IReadOnlyList<FileItem> targets)
+    {
         if (isConverting) return;
-        if (isUpdating) { statusLabel.Text = "正在下载转换引擎，请稍候"; return; }
-        if (files.Count == 0) { statusLabel.Text = "请先添加文件"; return; }
-        if (!File.Exists(enginePath)) { MessageBox.Show(this, "未找到 markitdown.exe。请确保它与本程序放在同一个文件夹。", "转换引擎缺失", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-        Directory.CreateDirectory(outputDirectoryBox.Text);
+        if (isUpdating)
+        {
+            statusLine.Text = "正在下载转换引擎，请稍候";
+            return;
+        }
+
+        if (targets.Count == 0)
+        {
+            statusLine.Text = "请先添加文件";
+            return;
+        }
+
+        if (!File.Exists(enginePath))
+        {
+            MessageBox.Show(this, "未找到 markitdown.exe。请确保它与本程序放在同一个文件夹。", "转换引擎缺失", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        Directory.CreateDirectory(outputDirectory);
         isConverting = true;
         SetControlsEnabled(false);
         progressBar.Minimum = 0;
-        progressBar.Maximum = files.Count;
+        progressBar.Maximum = targets.Count;
         progressBar.Value = 0;
+        statusLine.Current = StatusLine.State.Idle;
         var failed = 0;
 
         try
         {
-            for (var index = 0; index < files.Count; index++)
+            for (var index = 0; index < targets.Count; index++)
             {
-                var item = files[index];
-                item.Status = "正在转换";
-                UpdateRow(item);
-                statusLabel.Text = $"正在转换 {index + 1}/{files.Count}: {Path.GetFileName(item.InputPath)}";
+                var item = targets[index];
+                item.Status = FileStatus.Converting;
+                item.Error = null;
+                fileCard.FileList.Invalidate();
+                statusLine.Text = $"正在转换 {index + 1}/{targets.Count}: {item.FileName}";
                 item.OutputPath = GetOutputPath(item.InputPath);
-                var result = await RunEngineAsync(item.InputPath, item.OutputPath);
-                item.Status = result.Success ? "已完成" : "转换失败";
-                if (!result.Success) { item.Error = result.Error; failed++; }
-                UpdateRow(item);
+                try
+                {
+                    var result = await RunEngineAsync(item.InputPath, item.OutputPath);
+                    item.Status = result.Success ? FileStatus.Done : FileStatus.Failed;
+                    if (!result.Success)
+                    {
+                        item.Error = result.Error;
+                        failed++;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    item.OutputPath = null;
+                    item.Status = FileStatus.Failed;
+                    item.Error = exception.Message;
+                    failed++;
+                }
+
+                fileCard.FileList.Invalidate();
                 progressBar.Value = index + 1;
             }
         }
@@ -289,8 +412,17 @@ internal sealed class MainForm : Form
             SetControlsEnabled(true);
         }
 
-        statusLabel.Text = failed == 0 ? $"已完成 {files.Count} 个文件" : $"完成，{failed} 个文件转换失败";
-        if (failed > 0) MessageBox.Show(this, "部分文件未能转换。选择对应文件可在状态栏中查看结果。", "转换完成", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        UpdateIdleStatus();
+        if (failed > 0)
+        {
+            statusLine.Current = StatusLine.State.Failure;
+            progressBar.FillColor = Theme.Failure;
+            MessageBox.Show(this, "部分文件未能转换。可点击每行的省略号菜单查看或重新转换。", "转换完成", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        else
+        {
+            statusLine.Current = StatusLine.State.Success;
+        }
     }
 
     private async Task<ConversionResult> RunEngineAsync(string input, string output)
@@ -302,29 +434,53 @@ internal sealed class MainForm : Form
         process.Start();
         var errorsTask = process.StandardError.ReadToEndAsync();
         var outputTask = process.StandardOutput.ReadToEndAsync();
-        await process.WaitForExitAsync();
+
+        using var timeout = new CancellationTokenSource(EngineTimeout);
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // the engine already exited between the timeout and the kill
+            }
+
+            await process.WaitForExitAsync();
+            return new ConversionResult(false, $"转换超时（超过 {EngineTimeout.TotalMinutes:0} 分钟），已终止转换引擎。");
+        }
+
         var errors = await errorsTask;
         await outputTask;
-        return process.ExitCode == 0 ? new ConversionResult(true, "") : new ConversionResult(false, string.IsNullOrWhiteSpace(errors) ? "转换器未返回错误详情" : errors.Trim());
+        return process.ExitCode == 0 ? new ConversionResult(true, string.Empty) : new ConversionResult(false, string.IsNullOrWhiteSpace(errors) ? "转换器未返回错误详情" : errors.Trim());
     }
 
-    private void UpdateEngineButtonText() => updateEngineButton.Text = File.Exists(enginePath) ? "检查引擎更新" : "下载转换引擎";
+    private static readonly TimeSpan EngineTimeout = TimeSpan.FromMinutes(10);
+
+    private void UpdateEngineButtonText() => headerCard.UpdateButton.Text = File.Exists(enginePath) ? "检查引擎更新" : "下载转换引擎";
 
     private async Task EnsureEngineAsync()
     {
         isUpdating = true;
         SetControlsEnabled(false);
-        statusLabel.Text = "未找到转换引擎，正在自动下载...";
+        statusLine.Text = "未找到转换引擎，正在自动下载...";
         try
         {
             var updater = new EngineUpdateService(enginePath);
             var release = await updater.GetLatestReleaseAsync(CancellationToken.None);
             await DownloadEngineAsync(updater, release, "正在下载转换引擎");
-            statusLabel.Text = $"转换引擎已就绪 {release.Version}";
+            statusLine.Text = $"转换引擎已就绪 {release.Version}";
+            statusLine.Current = StatusLine.State.Success;
         }
         catch (Exception exception)
         {
-            statusLabel.Text = "转换引擎尚未安装";
+            statusLine.Text = "转换引擎尚未安装";
+            statusLine.Current = StatusLine.State.Failure;
             MessageBox.Show(this, $"无法自动下载转换引擎。\n\n{exception.Message}\n\n请点击“下载转换引擎”重试。", "转换引擎缺失", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally
@@ -342,7 +498,8 @@ internal sealed class MainForm : Form
             progressBar.Minimum = 0;
             progressBar.Maximum = 100;
             progressBar.Value = value;
-            statusLabel.Text = $"{action}: {value}%";
+            statusLine.Current = StatusLine.State.Idle;
+            statusLine.Text = $"{action}: {value}%";
         });
         await updater.InstallAsync(release, progress, CancellationToken.None);
         progressBar.Value = 100;
@@ -356,17 +513,18 @@ internal sealed class MainForm : Form
             return;
         }
 
-        updateEngineButton.Enabled = false;
+        headerCard.UpdateButton.Enabled = false;
         try
         {
-            statusLabel.Text = "正在检查引擎更新...";
+            statusLine.Text = "正在检查引擎更新...";
             var updater = new EngineUpdateService(enginePath);
             var release = await updater.GetLatestReleaseAsync(CancellationToken.None);
             var installedVersion = await updater.GetInstalledVersionAsync(CancellationToken.None);
             if (!release.IsNewerThan(installedVersion))
             {
-                statusLabel.Text = $"转换引擎已是最新版本 {installedVersion ?? release.Version}";
-                MessageBox.Show(this, statusLabel.Text, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                statusLine.Text = $"转换引擎已是最新版本 {installedVersion ?? release.Version}";
+                statusLine.Current = StatusLine.State.Success;
+                MessageBox.Show(this, statusLine.Text, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -374,27 +532,30 @@ internal sealed class MainForm : Form
             var choice = MessageBox.Show(this, $"发现新的转换引擎。\n\n当前版本: {currentText}\n可用版本: {release.Version}\n\n现在下载并安装吗？", "引擎更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (choice != DialogResult.Yes)
             {
-                statusLabel.Text = "已取消引擎更新";
+                statusLine.Text = "已取消引擎更新";
                 return;
             }
 
             await DownloadEngineAsync(updater, release, "正在下载引擎更新");
-            statusLabel.Text = $"已更新转换引擎至 {release.Version}";
-            MessageBox.Show(this, statusLabel.Text, "更新完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            statusLine.Text = $"已更新转换引擎至 {release.Version}";
+            statusLine.Current = StatusLine.State.Success;
+            MessageBox.Show(this, statusLine.Text, "更新完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (EngineUpdateException exception)
         {
-            statusLabel.Text = "引擎更新不可用";
+            statusLine.Text = "引擎更新不可用";
+            statusLine.Current = StatusLine.State.Failure;
             MessageBox.Show(this, exception.Message, "引擎更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         catch (Exception exception)
         {
-            statusLabel.Text = "引擎更新失败";
+            statusLine.Text = "引擎更新失败";
+            statusLine.Current = StatusLine.State.Failure;
             MessageBox.Show(this, $"无法完成引擎更新。\n\n{exception.Message}", "引擎更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
-            updateEngineButton.Enabled = true;
+            headerCard.UpdateButton.Enabled = true;
             UpdateEngineButtonText();
         }
     }
@@ -403,34 +564,78 @@ internal sealed class MainForm : Form
     {
         var name = Path.GetFileNameWithoutExtension(input);
         if (string.Equals(Path.GetExtension(input), ".md", StringComparison.OrdinalIgnoreCase)) name += "_converted";
-        var candidate = Path.Combine(outputDirectoryBox.Text, name + ".md");
-        for (var suffix = 2; File.Exists(candidate); suffix++) candidate = Path.Combine(outputDirectoryBox.Text, $"{name}_{suffix}.md");
+        var candidate = Path.Combine(outputDirectory, name + ".md");
+        for (var suffix = 2; File.Exists(candidate); suffix++) candidate = Path.Combine(outputDirectory, $"{name}_{suffix}.md");
         return candidate;
     }
 
-    private void UpdateRow(FileItem item)
+    private void UpdateIdleStatus()
     {
-        var row = filesView.Items.Cast<ListViewItem>().First(row => ReferenceEquals(row.Tag, item));
-        row.SubItems[2].Text = item.Status;
-        row.SubItems[3].Text = item.OutputPath is null ? "" : Path.GetFileName(item.OutputPath);
-        row.ForeColor = item.Status == "转换失败" ? Color.FromArgb(180, 38, 38) : Color.FromArgb(31, 41, 55);
+        statusLine.Current = StatusLine.State.Idle;
+        progressBar.FillColor = Theme.ProgressFill;
+        if (files.Count == 0)
+        {
+            statusLine.Text = "添加一个或多个文件以开始";
+            progressBar.Value = 0;
+            return;
+        }
+
+        var done = files.Count(item => item.Status == FileStatus.Done);
+        var failed = files.Count(item => item.Status == FileStatus.Failed);
+        if (done + failed == files.Count && failed == 0)
+        {
+            statusLine.Current = StatusLine.State.Success;
+            statusLine.Text = $"已完成 {done} 个文件";
+            progressBar.Value = progressBar.Maximum;
+            return;
+        }
+
+        if (failed > 0)
+        {
+            statusLine.Current = StatusLine.State.Failure;
+            statusLine.Text = $"完成，{failed} 个文件转换失败";
+            progressBar.Value = progressBar.Maximum;
+            return;
+        }
+
+        statusLine.Text = $"已添加 {files.Count} 个文件";
+        progressBar.Value = 0;
+    }
+
+    private void UpdateActionButtons()
+    {
+        var hasSelection = fileCard.FileList.CheckedCount > 0 || fileCard.FileList.SelectedItems.Count > 0;
+        removeButton.Enabled = !isConverting && !isUpdating && hasSelection;
+        convertButton.Enabled = !isConverting && !isUpdating;
+        addButton.Enabled = !isConverting && !isUpdating;
     }
 
     private void SetControlsEnabled(bool enabled)
     {
+        addButton.Enabled = enabled;
         convertButton.Enabled = enabled;
-        removeButton.Enabled = enabled && filesView.SelectedItems.Count > 0;
-        filesView.Enabled = enabled;
-        updateEngineButton.Enabled = enabled;
-    }
-
-    private sealed class FileItem(string inputPath)
-    {
-        public string InputPath { get; } = inputPath;
-        public string Status { get; set; } = "等待转换";
-        public string? OutputPath { get; set; }
-        public string? Error { get; set; }
+        fileCard.FileList.Enabled = enabled;
+        headerCard.UpdateButton.Enabled = enabled;
+        UpdateActionButtons();
     }
 
     private readonly record struct ConversionResult(bool Success, string Error);
+
+    private const int DwmwaBorderColor = 34;
+    private const int DwmwaCaptionColor = 35;
+    private const int DwmwaTextColor = 36;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    /// <summary>Tints the system title bar with the accent color on Windows 11.</summary>
+    private void ApplyCaptionColors()
+    {
+        var caption = ColorTranslator.ToWin32(Theme.Accent);
+        var border = ColorTranslator.ToWin32(Theme.Accent);
+        var text = ColorTranslator.ToWin32(Color.White);
+        DwmSetWindowAttribute(Handle, DwmwaCaptionColor, ref caption, sizeof(int));
+        DwmSetWindowAttribute(Handle, DwmwaBorderColor, ref border, sizeof(int));
+        DwmSetWindowAttribute(Handle, DwmwaTextColor, ref text, sizeof(int));
+    }
 }

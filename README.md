@@ -4,6 +4,14 @@ Windows desktop interface for [MarkItDown](https://github.com/microsoft/markitdo
 
 The C# application is the interface. `markitdown.exe` is the conversion engine that contains the Python runtime and its dependencies, so end users do not need Python installed. If the engine is missing when the app starts, the app downloads it automatically.
 
+## Using the app
+
+- Drop files on the header area or the list, or use **添加文件** to pick them.
+- Every file gets a row with its type, conversion status, and output file name. Tick the row checkboxes (or the header checkbox for everything) and use **移除所选** to take files off the list.
+- The `⋮` button on a row opens the output folder, reconverts that single file, shows the error details, or removes the row.
+- Choose where the Markdown files are written with **选择文件夹**, then press **开始转换**. The list shows green checks per file and the bottom card shows overall progress.
+- **检查引擎更新** compares the installed engine version with the newest release and downloads it when needed.
+
 ## Download
 
 Grab `MarkItDownDesktop-<version>-win-x64.zip` from the [latest release](https://github.com/JiafuYuan/MarkItDownDesktop/releases/latest), extract it anywhere, and run `MarkItDownDesktop.exe`. Nothing else needs to be installed.
